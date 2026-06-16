@@ -1,0 +1,8 @@
+{
+  "name": "pianificatore-moffo",
+  "version": "1.0.0",
+  "description": "La mia app di pianificazione",
+  "scripts": {
+    "build": "echo 'Sito statico, nessuna build necessaria'"
+  }
+}

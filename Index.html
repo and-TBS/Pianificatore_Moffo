@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pianificatore Moffo</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html { height: 100%; margin: 0; overflow: hidden; }
+        #map { height: 100%; width: 100%; min-height: 400px; }
+    </style>
+</head>
+<body class="flex h-screen w-screen">
+    <aside class="w-80 p-6 bg-white shadow-2xl z-[1000] overflow-y-auto border-r border-gray-100 flex flex-col">
+        <h1 class="text-xl font-bold text-emerald-700 mb-6 flex items-center gap-2">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+            Pianificatore
+        </h1>
+        <div class="mb-4">
+            <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Punto di Partenza</label>
+            <input id="origin" class="w-full p-2.5 bg-gray-50 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none transition" placeholder="Es: Bari">
+        </div>
+        <div class="flex gap-2">
+            <div class="flex-1">
+                <label class="block text-xs font-semibold text-gray-500 uppercase mb-1">Destinazione</label>
+                <input id="destination" class="w-full p-2.5 bg-gray-50 border rounded-lg focus:ring-2 focus:ring-emerald-500 outline-none transition" placeholder="Es: Matera">
+            </div>
+            <button id="addBtn" class="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 mt-5 rounded-lg transition self-end">Aggiungi</button>
+        </div>
+        <div id="list" class="mt-6 space-y-3 flex-1 overflow-y-auto"></div>
+    </aside>
+    <main class="flex-1 relative bg-gray-100">
+        <div id="map"></div>
+    </main>
+
+    <script>
+        const map = L.map('map').setView([41.87, 12.56], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let originData = null;
+        let destinations = []; // Array per gestire le destinazioni e i riferimenti agli oggetti Leaflet
+
+        const getRandomColor = () => '#' + Math.floor(Math.random()*16777215).toString(16);
+
+        document.getElementById('origin').addEventListener('blur', async (e) => {
+            const query = e.target.value;
+            if(!query) return;
+            const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=1`);
+            const data = await res.json();
+            if(data.features?.length > 0) {
+                const [lon, lat] = data.features[0].geometry.coordinates;
+                originData = { lat, lon };
+                map.setView([lat, lon], 12);
+                L.marker([lat, lon]).addTo(map).bindPopup("Partenza: " + query).openPopup();
+            }
+        });
+
+        document.getElementById('addBtn').addEventListener('click', async () => {
+            if(!originData) return alert("Imposta prima la partenza!");
+            const destName = document.getElementById('destination').value;
+            if(!destName) return;
+
+            const res = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(destName)}&limit=1`);
+            const data = await res.json();
+            if(data.features?.length > 0) {
+                const [dLon, dLat] = data.features[0].geometry.coordinates;
+                const routeUrl = `https://router.project-osrm.org/route/v1/driving/${originData.lon},${originData.lat};${dLon},${dLat}?overview=full&geometries=geojson`;
+                const routeRes = await fetch(routeUrl);
+                const routeData = await routeRes.json();
+
+                if(routeData.routes?.length > 0) {
+                    const route = routeData.routes[0];
+                    const km = (route.distance / 1000).toFixed(1);
+                    const min = Math.round(route.duration / 60);
+                    const pathColor = getRandomColor();
+
+                    const marker = L.marker([dLat, dLon]).addTo(map).bindPopup(destName);
+                    const polyline = L.polyline(route.geometry.coordinates.map(c => [c[1], c[0]]), { color: pathColor, weight: 6, opacity: 0.8 }).addTo(map)
+                                     .bindTooltip(`${destName}: ${km} km`, { sticky: true });
+
+                    const id = Date.now();
+                    destinations.push({ id, marker, polyline });
+
+                    const list = document.getElementById('list');
+                    const div = document.createElement('div');
+                    div.id = `item-${id}`;
+                    div.className = "p-3 border rounded-lg bg-white shadow-sm border-l-4 flex justify-between items-center";
+                    div.style.borderLeftColor = pathColor;
+                    div.innerHTML = `
+                        <div>
+                            <p class="font-bold text-gray-900">${destName}</p>
+                            <p class="text-xs text-gray-500">${km} km • ${min} minuti</p>
+                        </div>
+                        <button onclick="removeDest(${id})" class="text-red-400 hover:text-red-600 font-bold px-2">✕</button>
+                    `;
+                    list.appendChild(div);
+                }
+            }
+        });
+
+        window.removeDest = (id) => {
+            const item = destinations.find(d => d.id === id);
+            if(item) {
+                map.removeLayer(item.marker);
+                map.removeLayer(item.polyline);
+                document.getElementById(`item-${id}`).remove();
+                destinations = destinations.filter(d => d.id !== id);
+            }
+        };
+    </script>
+</body>
+</html>
